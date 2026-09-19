@@ -642,3 +642,7 @@ server.listen(PORT, () => {
   console.log(`TravelMate server running on http://localhost:${PORT}`);
 });
 
+// Keep-alive heartbeat
+setInterval(() => {}, 1000 * 60 * 60);
+
+
