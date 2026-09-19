@@ -1,16 +1,23 @@
 /**
  * TravelMate - Cute Pastel Scrapbook Travel Planner
- * Vanilla JavaScript (No libraries, zero external dependencies)
+ * Vanilla JavaScript connected to TravelMateDB (IndexedDB)
  */
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
 
   // ==========================================
   // 1. STATE & REALISTIC MOCK DATA
   // ==========================================
 
-  // Active Trip State (Current Trip displayed in Itinerary)
-  let currentTrip = {
+  let currentTrip = null;
+  let savedTrips = [];
+  let packingItems = [];
+  let expenses = [];
+  let plannedTotalBudget = 2000;
+  let activeItineraryDay = 1;
+
+  // Initial Seed Data for first-time DB initialization
+  const initialTripSeed = {
     id: 'trip-1',
     title: 'Kyoto & Uji Blossom Trail 🌸',
     destination: 'Kyoto, Japan',
@@ -119,49 +126,7 @@ document.addEventListener('DOMContentLoaded', () => {
     ]
   };
 
-  // Saved Trips Collection
-  let savedTrips = [
-    currentTrip,
-    {
-      id: 'trip-2',
-      title: 'Amalfi Lemon Sunshine 🍋',
-      destination: 'Positano & Capri, Italy',
-      departure: '2026-06-12',
-      returnDate: '2026-06-18',
-      duration: 7,
-      budget: 3200,
-      currency: 'EUR',
-      currencySymbol: '€',
-      travellerType: 'Couple / Pair',
-      travellerCount: 2,
-      style: 'Beach & Island Chill',
-      accommodation: 'Cliffside Pastel Villa',
-      pace: 'Chill & Relaxed',
-      image: 'https://images.unsplash.com/photo-1533105079780-92b9be482077?w=600&auto=format&fit=crop&q=80',
-      days: []
-    },
-    {
-      id: 'trip-3',
-      title: 'Swiss Alpine Meadow Escape 🏔️',
-      destination: 'Lauterbrunnen & Zermatt',
-      departure: '2026-08-04',
-      returnDate: '2026-08-09',
-      duration: 6,
-      budget: 2500,
-      currency: 'USD',
-      currencySymbol: '$',
-      travellerType: 'Bestie Squad',
-      travellerCount: 3,
-      style: 'Adventure & Outdoors',
-      accommodation: 'Pine Log Chalet',
-      pace: 'Balanced Flow',
-      image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&auto=format&fit=crop&q=80',
-      days: []
-    }
-  ];
-
-  // Packing List Data
-  let packingItems = [
+  const initialPackingSeed = [
     { id: 1, text: 'Passport & Photocopies', category: 'tech', checked: true },
     { id: 2, text: 'Universal Power Adapter', category: 'tech', checked: true },
     { id: 3, text: 'Compact Polaroid Camera', category: 'tech', checked: true },
@@ -180,8 +145,7 @@ document.addEventListener('DOMContentLoaded', () => {
     { id: 16, text: 'Reusable Canvas Tote Bag', category: 'essentials', checked: false }
   ];
 
-  // Budget Tracker Expenses Data
-  let expenses = [
+  const initialBudgetExpensesSeed = [
     { id: 1, category: 'Flight & Transit', desc: 'Roundtrip Flights (2 tickets)', amount: 780.00 },
     { id: 2, category: 'Hotel & Stay', desc: 'Machiya Townhouse Deposit', amount: 320.00 },
     { id: 3, category: 'Food & Drinks', desc: 'Matcha Sweets & Ramen Lunch', amount: 42.50 },
@@ -265,11 +229,127 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   ];
 
-  let activeItineraryDay = 1;
+
+  // ==========================================
+  // 2. DATABASE PERSISTENCE INITIALIZATION
+  // ==========================================
+  async function initDatabaseAndState() {
+    try {
+      const dbTrips = await window.TravelMateDB.getAllTrips();
+
+      if (!dbTrips || dbTrips.length === 0) {
+        // Seed initial data into IndexedDB
+        await window.TravelMateDB.putTrip(initialTripSeed);
+        await window.TravelMateDB.saveItineraryDays(initialTripSeed.id, initialTripSeed.days);
+        await window.TravelMateDB.savePackingForTrip(initialTripSeed.id, initialPackingSeed);
+        await window.TravelMateDB.saveBudgetForTrip(initialTripSeed.id, initialTripSeed.budget, initialBudgetExpensesSeed);
+
+        // Seed 2 additional sample trips
+        const trip2 = {
+          id: 'trip-2',
+          title: 'Amalfi Lemon Sunshine 🍋',
+          destination: 'Positano & Capri, Italy',
+          departure: '2026-06-12',
+          returnDate: '2026-06-18',
+          duration: 7,
+          budget: 3200,
+          currency: 'EUR',
+          currencySymbol: '€',
+          travellerType: 'Couple / Pair',
+          travellerCount: 2,
+          style: 'Beach & Island Chill',
+          accommodation: 'Cliffside Pastel Villa',
+          pace: 'Chill & Relaxed',
+          image: 'https://images.unsplash.com/photo-1533105079780-92b9be482077?w=600&auto=format&fit=crop&q=80',
+          days: generateItineraryDays('Positano & Capri, Italy', 7, 'Cliffside Pastel Villa', 'Beach & Island Chill')
+        };
+        await window.TravelMateDB.putTrip(trip2);
+        await window.TravelMateDB.saveItineraryDays(trip2.id, trip2.days);
+        await window.TravelMateDB.savePackingForTrip(trip2.id, initialPackingSeed.slice(0, 8));
+        await window.TravelMateDB.saveBudgetForTrip(trip2.id, trip2.budget, []);
+
+        const trip3 = {
+          id: 'trip-3',
+          title: 'Swiss Alpine Meadow Escape 🏔️',
+          destination: 'Lauterbrunnen & Zermatt',
+          departure: '2026-08-04',
+          returnDate: '2026-08-09',
+          duration: 6,
+          budget: 2500,
+          currency: 'USD',
+          currencySymbol: '$',
+          travellerType: 'Bestie Squad',
+          travellerCount: 3,
+          style: 'Adventure & Outdoors',
+          accommodation: 'Pine Log Chalet',
+          pace: 'Balanced Flow',
+          image: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?w=600&auto=format&fit=crop&q=80',
+          days: generateItineraryDays('Lauterbrunnen & Zermatt', 6, 'Pine Log Chalet', 'Adventure & Outdoors')
+        };
+        await window.TravelMateDB.putTrip(trip3);
+        await window.TravelMateDB.saveItineraryDays(trip3.id, trip3.days);
+        await window.TravelMateDB.savePackingForTrip(trip3.id, initialPackingSeed.slice(0, 6));
+        await window.TravelMateDB.saveBudgetForTrip(trip3.id, trip3.budget, []);
+
+        savedTrips = [initialTripSeed, trip2, trip3];
+        currentTrip = initialTripSeed;
+        packingItems = [...initialPackingSeed];
+        expenses = [...initialBudgetExpensesSeed];
+        plannedTotalBudget = initialTripSeed.budget;
+      } else {
+        // Load trips from IndexedDB
+        savedTrips = dbTrips;
+        currentTrip = savedTrips[0];
+
+        // Load itinerary for active trip
+        const storedDays = await window.TravelMateDB.getItineraryForTrip(currentTrip.id);
+        if (storedDays && storedDays.length > 0) {
+          currentTrip.days = storedDays.map(d => ({
+            dayNumber: d.day,
+            title: d.title || `Day ${d.day}`,
+            city: d.city,
+            hotel: d.hotel,
+            activities: d.activities || { morning: [], afternoon: [], evening: [] }
+          }));
+        } else if (!currentTrip.days || currentTrip.days.length === 0) {
+          currentTrip.days = generateItineraryDays(currentTrip.destination, currentTrip.duration, currentTrip.accommodation, currentTrip.style);
+          await window.TravelMateDB.saveItineraryDays(currentTrip.id, currentTrip.days);
+        }
+
+        // Load packing items for active trip
+        const storedPacking = await window.TravelMateDB.getPackingForTrip(currentTrip.id);
+        packingItems = storedPacking ? storedPacking : [...initialPackingSeed];
+
+        // Load budget for active trip
+        const storedBudget = await window.TravelMateDB.getBudgetForTrip(currentTrip.id);
+        if (storedBudget) {
+          plannedTotalBudget = storedBudget.plannedBudget || currentTrip.budget;
+          expenses = storedBudget.expenses || [];
+        } else {
+          plannedTotalBudget = currentTrip.budget;
+          expenses = [...initialBudgetExpensesSeed];
+        }
+      }
+    } catch (err) {
+      console.warn('DB initialization fallback to memory state:', err);
+      savedTrips = [initialTripSeed];
+      currentTrip = initialTripSeed;
+      packingItems = [...initialPackingSeed];
+      expenses = [...initialBudgetExpensesSeed];
+    }
+
+    // Render components
+    renderItineraryView();
+    renderPackingList();
+    renderBudget();
+    renderMyTrips();
+    renderDestinations();
+    updateDurationDisplay();
+  }
 
 
   // ==========================================
-  // 2. NAVIGATION & TAB SWITCHING
+  // 3. NAVIGATION & TAB SWITCHING
   // ==========================================
   const navLinks = document.querySelectorAll('.nav-link');
   const pageSections = document.querySelectorAll('.page-section');
@@ -277,7 +357,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const navMenu = document.getElementById('navMenu');
 
   window.navigateTo = function(targetSectionId) {
-    // Update nav link active state
     navLinks.forEach(link => {
       if (link.dataset.target === targetSectionId) {
         link.classList.add('active');
@@ -286,7 +365,6 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Show target section
     pageSections.forEach(sec => {
       if (sec.id === targetSectionId) {
         sec.classList.add('active');
@@ -295,16 +373,13 @@ document.addEventListener('DOMContentLoaded', () => {
       }
     });
 
-    // Close mobile nav if open
-    if (navMenu.classList.contains('mobile-open')) {
+    if (navMenu && navMenu.classList.contains('mobile-open')) {
       navMenu.classList.remove('mobile-open');
     }
 
-    // Scroll smoothly to top of content
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
-  // Nav click events
   navLinks.forEach(link => {
     link.addEventListener('click', (e) => {
       const target = e.currentTarget.dataset.target;
@@ -312,7 +387,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   });
 
-  // Mobile nav burger toggle
   if (navToggle) {
     navToggle.addEventListener('click', () => {
       navMenu.classList.toggle('mobile-open');
@@ -321,7 +395,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ==========================================
-  // 3. TOAST NOTIFICATION HELPER
+  // 4. TOAST NOTIFICATION HELPER
   // ==========================================
   const toastEl = document.getElementById('toastNotification');
   let toastTimer = null;
@@ -338,14 +412,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ==========================================
-  // 4. PLAN TRIP FORM LOGIC
+  // 5. PLAN TRIP FORM LOGIC & PERSISTENCE
   // ==========================================
   const planTripForm = document.getElementById('planTripForm');
   const tripDepInput = document.getElementById('tripDeparture');
   const tripRetInput = document.getElementById('tripReturn');
   const durationPreview = document.getElementById('tripDurationPreview');
 
-  // Set default sensible dates (departure: tomorrow, return: 5 days later)
   const today = new Date();
   const depDate = new Date(today);
   depDate.setDate(today.getDate() + 14);
@@ -383,7 +456,6 @@ document.addEventListener('DOMContentLoaded', () => {
     tripRetInput.addEventListener('change', updateDurationDisplay);
   }
 
-  // Pre-fill form from destination cards
   window.prefillTripForm = function(destObj) {
     document.getElementById('tripDestination').value = destObj.name;
     document.getElementById('tripBudgetAmount').value = destObj.defaultBudget;
@@ -394,7 +466,6 @@ document.addEventListener('DOMContentLoaded', () => {
     showToast(`Loaded ${destObj.name} into planner!`, '📍');
   };
 
-  // Generate realistic days for user's customized destination
   function generateItineraryDays(destName, numDays, hotelName, travelStyle) {
     const daysArr = [];
     const themes = [
@@ -431,9 +502,8 @@ document.addEventListener('DOMContentLoaded', () => {
     return daysArr;
   }
 
-  // Handle Plan Trip Form Submit
   if (planTripForm) {
-    planTripForm.addEventListener('submit', (e) => {
+    planTripForm.addEventListener('submit', async (e) => {
       e.preventDefault();
 
       const destination = document.getElementById('tripDestination').value.trim();
@@ -451,8 +521,11 @@ document.addEventListener('DOMContentLoaded', () => {
       const symbolMap = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹', CAD: 'C$', AUD: 'A$' };
       const currencySymbol = symbolMap[currency] || '$';
 
+      const tripId = 'trip-' + Date.now();
+      const itineraryDays = generateItineraryDays(destination, duration, accommodation, style);
+
       const newTrip = {
-        id: 'trip-' + Date.now(),
+        id: tripId,
         title: `${destination} Adventure ✨`,
         destination: destination,
         departure: departure,
@@ -467,26 +540,36 @@ document.addEventListener('DOMContentLoaded', () => {
         accommodation: accommodation,
         pace: pace,
         image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=600&auto=format&fit=crop&q=80',
-        days: generateItineraryDays(destination, duration, accommodation, style)
+        days: itineraryDays
       };
 
-      // Set as active trip
+      // Save to IndexedDB
+      await window.TravelMateDB.putTrip(newTrip);
+      await window.TravelMateDB.saveItineraryDays(tripId, itineraryDays);
+      await window.TravelMateDB.savePackingForTrip(tripId, initialPackingSeed);
+      await window.TravelMateDB.saveBudgetForTrip(tripId, budget, []);
+
+      // Update state
       currentTrip = newTrip;
       savedTrips.unshift(newTrip);
+      packingItems = [...initialPackingSeed];
+      plannedTotalBudget = budget;
+      expenses = [];
+      activeItineraryDay = 1;
 
-      // Render updated views
       renderItineraryView();
+      renderPackingList();
+      renderBudget();
       renderMyTrips();
 
-      // Switch to Itinerary tab
       navigateTo('itinerary');
-      showToast(`Trip to ${destination} planned & saved!`, '🎉');
+      showToast(`Saved to database: ${destination}!`, '💾');
     });
   }
 
 
   // ==========================================
-  // 5. ITINERARY RENDERING & TABS
+  // 6. ITINERARY RENDERING & TABS
   // ==========================================
   const itineraryTripTitle = document.getElementById('itineraryTripTitle');
   const itineraryTripSubtitle = document.getElementById('itineraryTripSubtitle');
@@ -499,21 +582,17 @@ document.addEventListener('DOMContentLoaded', () => {
   function renderItineraryView() {
     if (!currentTrip) return;
 
-    // Header info
     itineraryTripTitle.textContent = currentTrip.title;
     itineraryTripSubtitle.textContent = `${currentTrip.duration} Days • ${currentTrip.travellerCount} Travellers (${currentTrip.travellerType}) • ${currentTrip.style}`;
 
-    // Ensure days array has elements
     if (!currentTrip.days || currentTrip.days.length === 0) {
       currentTrip.days = generateItineraryDays(currentTrip.destination, currentTrip.duration, currentTrip.accommodation, currentTrip.style);
     }
 
-    // Reset active day if out of bounds
     if (activeItineraryDay > currentTrip.days.length) {
       activeItineraryDay = 1;
     }
 
-    // Render Day Tabs
     itineraryDayTabs.innerHTML = '';
     currentTrip.days.forEach((d) => {
       const tabBtn = document.createElement('button');
@@ -526,13 +605,11 @@ document.addEventListener('DOMContentLoaded', () => {
       itineraryDayTabs.appendChild(tabBtn);
     });
 
-    // Render Selected Day Content
     const currentDayData = currentTrip.days.find(d => d.dayNumber === activeItineraryDay) || currentTrip.days[0];
     itineraryCurrentDayLabel.textContent = currentDayData.title || `Day ${currentDayData.dayNumber}`;
     itineraryCurrentHotel.innerHTML = `<span>🏨 Stay:</span> <strong>${currentDayData.hotel || currentTrip.accommodation}</strong>`;
     itineraryCurrentCity.textContent = `📍 ${currentDayData.city || currentTrip.destination}`;
 
-    // Render Timeline: Morning, Afternoon, Evening
     itineraryTimeline.innerHTML = '';
     const periods = [
       { key: 'morning', label: '🌅 Morning', tagClass: 'tag-morning', items: currentDayData.activities?.morning || [] },
@@ -569,10 +646,10 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Add custom activity to active day
+  // Add custom activity to active day and save to DB
   const addActivityForm = document.getElementById('addActivityForm');
   if (addActivityForm) {
-    addActivityForm.addEventListener('submit', (e) => {
+    addActivityForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const period = document.getElementById('newActivityTimePeriod').value.toLowerCase();
       const time = document.getElementById('newActivityTime').value.trim();
@@ -583,16 +660,20 @@ document.addEventListener('DOMContentLoaded', () => {
       if (dayObj) {
         if (!dayObj.activities[period]) dayObj.activities[period] = [];
         dayObj.activities[period].push({ time, title, desc });
+
+        // Persist to DB
+        await window.TravelMateDB.saveItineraryDays(currentTrip.id, currentTrip.days);
+
         renderItineraryView();
         addActivityForm.reset();
-        showToast('Added moment to Day ' + activeItineraryDay, '✨');
+        showToast('Saved moment to Day ' + activeItineraryDay, '✨');
       }
     });
   }
 
 
   // ==========================================
-  // 6. PACKING LIST LOGIC
+  // 7. PACKING LIST LOGIC & PERSISTENCE
   // ==========================================
   const packingStatsEl = document.getElementById('packingStats');
   const packingPercentEl = document.getElementById('packingPercent');
@@ -637,16 +718,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Checkbox change
         const chk = li.querySelector('input[type="checkbox"]');
-        chk.addEventListener('change', (e) => {
+        chk.addEventListener('change', async (e) => {
           item.checked = e.target.checked;
           li.classList.toggle('checked', item.checked);
           updatePackingProgress();
+          if (currentTrip) {
+            await window.TravelMateDB.savePackingForTrip(currentTrip.id, packingItems);
+          }
         });
 
         // Delete button
         const delBtn = li.querySelector('.item-delete-btn');
-        delBtn.addEventListener('click', () => {
+        delBtn.addEventListener('click', async () => {
           packingItems = packingItems.filter(i => i.id !== item.id);
+          if (currentTrip) {
+            await window.TravelMateDB.savePackingForTrip(currentTrip.id, packingItems);
+          }
           renderPackingList();
           updatePackingProgress();
           showToast('Item removed', '🗑️');
@@ -660,7 +747,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   if (addPackingItemForm) {
-    addPackingItemForm.addEventListener('submit', (e) => {
+    addPackingItemForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const input = document.getElementById('packingItemInput');
       const catSelect = document.getElementById('packingCategorySelect');
@@ -678,14 +765,19 @@ document.addEventListener('DOMContentLoaded', () => {
 
       packingItems.push(newItem);
       input.value = '';
+
+      if (currentTrip) {
+        await window.TravelMateDB.savePackingForTrip(currentTrip.id, packingItems);
+      }
+
       renderPackingList();
-      showToast(`Added "${text}" to ${category}`, '🎒');
+      showToast(`Saved "${text}" to checklist`, '🎒');
     });
   }
 
 
   // ==========================================
-  // 7. BUDGET TRACKER LOGIC
+  // 8. BUDGET TRACKER LOGIC & PERSISTENCE
   // ==========================================
   const budgetTotalDisplay = document.getElementById('budgetTotalDisplay');
   const budgetSpentDisplay = document.getElementById('budgetSpentDisplay');
@@ -695,8 +787,6 @@ document.addEventListener('DOMContentLoaded', () => {
   const expenseTableBody = document.getElementById('expenseTableBody');
   const expenseCountLabel = document.getElementById('expenseCountLabel');
   const addExpenseForm = document.getElementById('addExpenseForm');
-
-  let plannedTotalBudget = 2000;
 
   function renderBudget() {
     const totalSpent = expenses.reduce((sum, item) => sum + item.amount, 0);
@@ -712,7 +802,6 @@ document.addEventListener('DOMContentLoaded', () => {
     budgetProgressBar.style.width = `${percentSpent}%`;
     budgetSpentPercentage.textContent = `${percentSpent}% of your total budget used`;
 
-    // Render table rows
     expenseTableBody.innerHTML = '';
     expenseCountLabel.textContent = `${expenses.length} record${expenses.length === 1 ? '' : 's'}`;
 
@@ -732,8 +821,11 @@ document.addEventListener('DOMContentLoaded', () => {
         </td>
       `;
 
-      tr.querySelector('.item-delete-btn').addEventListener('click', () => {
+      tr.querySelector('.item-delete-btn').addEventListener('click', async () => {
         expenses = expenses.filter(e => e.id !== exp.id);
+        if (currentTrip) {
+          await window.TravelMateDB.saveBudgetForTrip(currentTrip.id, plannedTotalBudget, expenses);
+        }
         renderBudget();
         showToast('Expense removed', '🗑️');
       });
@@ -743,7 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   if (addExpenseForm) {
-    addExpenseForm.addEventListener('submit', (e) => {
+    addExpenseForm.addEventListener('submit', async (e) => {
       e.preventDefault();
       const cat = document.getElementById('expenseCategory').value;
       const desc = document.getElementById('expenseDesc').value.trim();
@@ -758,6 +850,10 @@ document.addEventListener('DOMContentLoaded', () => {
         amount: amt
       });
 
+      if (currentTrip) {
+        await window.TravelMateDB.saveBudgetForTrip(currentTrip.id, plannedTotalBudget, expenses);
+      }
+
       addExpenseForm.reset();
       renderBudget();
       showToast(`Recorded: ${desc}`, '💸');
@@ -766,7 +862,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ==========================================
-  // 8. MY TRIPS SECTION
+  // 9. MY TRIPS SECTION & PERSISTENCE
   // ==========================================
   const myTripsContainer = document.getElementById('myTripsContainer');
 
@@ -796,30 +892,62 @@ document.addEventListener('DOMContentLoaded', () => {
         </div>
       `;
 
-      // View Itinerary click
-      card.querySelector('.view-trip-btn').addEventListener('click', () => {
+      // View Itinerary click & load trip state from DB
+      card.querySelector('.view-trip-btn').addEventListener('click', async () => {
         currentTrip = trip;
-        plannedTotalBudget = trip.budget;
         activeItineraryDay = 1;
+
+        // Load trip itinerary from DB
+        const storedDays = await window.TravelMateDB.getItineraryForTrip(trip.id);
+        if (storedDays && storedDays.length > 0) {
+          currentTrip.days = storedDays.map(d => ({
+            dayNumber: d.day,
+            title: d.title || `Day ${d.day}`,
+            city: d.city,
+            hotel: d.hotel,
+            activities: d.activities || { morning: [], afternoon: [], evening: [] }
+          }));
+        } else if (!currentTrip.days || currentTrip.days.length === 0) {
+          currentTrip.days = generateItineraryDays(currentTrip.destination, currentTrip.duration, currentTrip.accommodation, currentTrip.style);
+        }
+
+        // Load packing from DB
+        const storedPacking = await window.TravelMateDB.getPackingForTrip(trip.id);
+        packingItems = storedPacking ? storedPacking : [...initialPackingSeed];
+
+        // Load budget from DB
+        const storedBudget = await window.TravelMateDB.getBudgetForTrip(trip.id);
+        if (storedBudget) {
+          plannedTotalBudget = storedBudget.plannedBudget || trip.budget;
+          expenses = storedBudget.expenses || [];
+        } else {
+          plannedTotalBudget = trip.budget;
+          expenses = [];
+        }
+
         renderItineraryView();
+        renderPackingList();
         renderBudget();
         navigateTo('itinerary');
         showToast(`Loaded ${trip.destination}!`, '🗺️');
       });
 
       // Delete trip click
-      card.querySelector('.delete-trip-btn').addEventListener('click', () => {
+      card.querySelector('.delete-trip-btn').addEventListener('click', async () => {
         if (savedTrips.length <= 1) {
           showToast('Keep at least one trip in your scrapbook!', '🌸');
           return;
         }
+
+        await window.TravelMateDB.deleteTrip(trip.id);
         savedTrips = savedTrips.filter(t => t.id !== trip.id);
+
         if (currentTrip.id === trip.id) {
           currentTrip = savedTrips[0];
           renderItineraryView();
         }
         renderMyTrips();
-        showToast('Trip removed from scrapbook', '🗑️');
+        showToast('Trip removed from database', '🗑️');
       });
 
       myTripsContainer.appendChild(card);
@@ -828,7 +956,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ==========================================
-  // 9. DESTINATIONS INSPIRATION
+  // 10. DESTINATIONS INSPIRATION
   // ==========================================
   const destinationsContainer = document.getElementById('destinationsContainer');
 
@@ -867,13 +995,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
   // ==========================================
-  // 10. INITIALIZE APP
+  // 11. START APPLICATION
   // ==========================================
-  renderItineraryView();
-  renderPackingList();
-  renderBudget();
-  renderMyTrips();
-  renderDestinations();
-  updateDurationDisplay();
+  initDatabaseAndState();
 
 });
