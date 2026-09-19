@@ -1,0 +1,4 @@
+.env
+node_modules/
+travelmate.db
+travelmate.db-journal

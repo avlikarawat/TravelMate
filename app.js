@@ -1,25 +1,16 @@
 /**
  * TravelMate - Cute Pastel Scrapbook Travel Planner
- * Frontend connected to Backend API -> SQLite Database -> Frontend
+ * Frontend connected to Backend API (with Groq AI /generate-trip) -> SQLite Database -> Frontend
  */
 
 document.addEventListener('DOMContentLoaded', async () => {
 
   // ==========================================
-  // 1. BACKEND API CLIENT (frontend -> backend -> database)
+  // 1. BACKEND API CLIENT
   // ==========================================
   const API_BASE = window.location.origin.startsWith('http') ? window.location.origin : 'http://localhost:3000';
 
   const API = {
-    async isBackendAvailable() {
-      try {
-        const res = await fetch(`${API_BASE}/api/trips`, { method: 'GET' });
-        return res.ok;
-      } catch (e) {
-        return false;
-      }
-    },
-
     async getTrips() {
       const res = await fetch(`${API_BASE}/api/trips`);
       if (!res.ok) throw new Error('Failed to fetch trips');
@@ -30,6 +21,19 @@ document.addEventListener('DOMContentLoaded', async () => {
       const res = await fetch(`${API_BASE}/api/trips/${id}`);
       if (!res.ok) throw new Error('Failed to fetch trip details');
       return await res.json();
+    },
+
+    async generateTrip(payload) {
+      const res = await fetch(`${API_BASE}/generate-trip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || `Server error (${res.status})`);
+      }
+      return data;
     },
 
     async createTrip(tripData) {
@@ -103,7 +107,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   let activeItineraryDay = 1;
   let editingTripId = null;
 
-  // Destinations Postcards Mock Data for Inspiration
+  // Destinations Postcards Data
   const destinationsData = [
     {
       name: 'Kyoto & Nara',
@@ -179,13 +183,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
   ];
 
-  // Initialize App: Load data from Backend -> Database -> Frontend
+  // Initialize App: Load data from Backend
   async function loadInitialData() {
     try {
       const trips = await API.getTrips();
       if (trips && trips.length > 0) {
         savedTrips = trips;
-        // Load first trip in full detail
         const fullTrip = await API.getTrip(savedTrips[0].id);
         currentTrip = fullTrip;
         packingItems = fullTrip.packing || [];
@@ -193,8 +196,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         plannedTotalBudget = fullTrip.budget?.plannedBudget || fullTrip.budget || 2000;
       }
     } catch (err) {
-      console.warn('Backend API connection warning, falling back to local storage:', err);
-      // Fallback to IndexedDB if backend is temporarily unreachable
+      console.warn('Backend API connection warning, falling back to local DB:', err);
       if (window.TravelMateDB) {
         savedTrips = await window.TravelMateDB.getAllTrips();
         if (savedTrips.length > 0) currentTrip = savedTrips[0];
@@ -253,19 +255,19 @@ document.addEventListener('DOMContentLoaded', async () => {
   const toastEl = document.getElementById('toastNotification');
   let toastTimer = null;
 
-  function showToast(message, emoji = '✨') {
+  function showToast(message, emoji = '✨', duration = 3200) {
     if (!toastEl) return;
     toastEl.innerHTML = `<span>${emoji}</span> ${message}`;
     toastEl.classList.add('show');
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => {
       toastEl.classList.remove('show');
-    }, 2800);
+    }, duration);
   }
 
 
   // ==========================================
-  // 5. TRIP FORM OPERATIONS (Create & Edit)
+  // 5. TRIP FORM OPERATIONS (Groq AI Integration)
   // ==========================================
   const planTripForm = document.getElementById('planTripForm');
   const tripDepInput = document.getElementById('tripDeparture');
@@ -320,7 +322,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`Loaded ${destObj.name} into planner!`, '📍');
   };
 
-  // Prefill form for editing an existing trip
   window.editExistingTrip = function(trip) {
     editingTripId = trip.id;
     document.getElementById('tripDestination').value = trip.destination;
@@ -341,7 +342,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     showToast(`Editing: ${trip.title}`, '✏️');
   };
 
-  function generateItineraryDays(destName, numDays, hotelName, travelStyle) {
+  // Local fallback generator if AI call is unavailable
+  function generateFallbackDays(destName, numDays, hotelName, travelStyle) {
     const daysArr = [];
     const themes = [
       { morning: 'Arrival & Welcome Cafe', afternoon: 'Historical Old Town Stroll & Local Bites', evening: 'Sunset Views & Cozy Welcome Dinner' },
@@ -362,19 +364,22 @@ document.addEventListener('DOMContentLoaded', async () => {
         city: destName,
         hotel: hotelName,
         activities: {
-          morning: [{ time: '09:00 AM', title: theme.morning, desc: `Start Day ${i} at ${destName} surrounded by fresh air.` }],
-          afternoon: [{ time: '01:30 PM', title: theme.afternoon, desc: `Immerse in the ${travelStyle.toLowerCase()} vibe of the neighborhood.` }],
-          evening: [{ time: '07:00 PM', title: theme.evening, desc: 'Unwind with memorable dishes and relaxing tunes.' }]
+          morning: [{ time: '09:00 AM', title: theme.morning, desc: `Start Day ${i} at ${destName}.` }],
+          afternoon: [{ time: '01:30 PM', title: theme.afternoon, desc: `Experience the ${travelStyle.toLowerCase()} atmosphere.` }],
+          evening: [{ time: '07:00 PM', title: theme.evening, desc: 'Relax with dinner and music.' }]
         }
       });
     }
     return daysArr;
   }
 
-  // Handle Form Submit: Create or Edit Trip -> Backend
+  // Handle Form Submit (Calls /generate-trip with Loading & Retry handling)
   if (planTripForm) {
     planTripForm.addEventListener('submit', async (e) => {
       e.preventDefault();
+
+      const submitBtn = planTripForm.querySelector('button[type="submit"]');
+      const originalBtnHtml = submitBtn.innerHTML;
 
       const destination = document.getElementById('tripDestination').value.trim();
       const departure = tripDepInput.value;
@@ -391,8 +396,8 @@ document.addEventListener('DOMContentLoaded', async () => {
       const symbolMap = { USD: '$', EUR: '€', GBP: '£', JPY: '¥', INR: '₹', CAD: 'C$', AUD: 'A$' };
       const currencySymbol = symbolMap[currency] || '$';
 
+      // If EDIT mode
       if (editingTripId) {
-        // --- EDIT EXISTING TRIP ---
         const updatePayload = {
           title: `${destination} Adventure ✨`,
           destination, departure, returnDate, duration, budget,
@@ -401,7 +406,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         };
         await API.updateTrip(editingTripId, updatePayload);
 
-        // Update local object
         const target = savedTrips.find(t => t.id === editingTripId);
         if (target) Object.assign(target, updatePayload);
         if (currentTrip && currentTrip.id === editingTripId) {
@@ -409,55 +413,111 @@ document.addEventListener('DOMContentLoaded', async () => {
           plannedTotalBudget = budget;
         }
         editingTripId = null;
+        renderItineraryView();
+        renderMyTrips();
+        navigateTo('itinerary');
         showToast(`Trip updated successfully!`, '✅');
-      } else {
-        // --- CREATE NEW TRIP ---
-        const tripId = 'trip-' + Date.now();
-        const itineraryDays = generateItineraryDays(destination, duration, accommodation, style);
-        const defaultPacking = [
-          { id: 1, text: 'Passport & Travel Documents', category: 'tech', checked: true },
-          { id: 2, text: 'Universal Power Adapter', category: 'tech', checked: true },
-          { id: 3, text: 'Comfy Walking Shoes', category: 'clothing', checked: false },
-          { id: 4, text: 'Sunscreen & Lip Balm', category: 'toiletries', checked: false },
-          { id: 5, text: 'Scrapbook Journal & Camera', category: 'essentials', checked: true }
-        ];
+        return;
+      }
 
-        const newTripPayload = {
-          id: tripId,
-          title: `${destination} Adventure ✨`,
-          destination, departure, returnDate, duration, budget,
-          currency, currencySymbol, travellerType, travellerCount,
-          style, accommodation, pace,
-          image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=600&auto=format&fit=crop&q=80',
-          days: itineraryDays,
-          packing: defaultPacking,
-          expenses: []
-        };
+      // If CREATE mode -> Call Groq AI via backend /generate-trip
+      const tripPayload = {
+        destination, departure, returnDate, duration, budget,
+        currency, travellerType, travellerCount, style,
+        accommodation, pace
+      };
 
-        // Backend POST
-        await API.createTrip(newTripPayload);
+      // Loading state
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<span>✨ Crafting with Groq AI (openai/gpt-oss-120b)...</span>`;
+      showToast('Generating personalized itinerary with Groq AI...', '🤖', 4000);
 
-        currentTrip = newTripPayload;
-        savedTrips.unshift(newTripPayload);
-        packingItems = defaultPacking;
-        expenses = [];
+      try {
+        const aiTrip = await API.generateTrip(tripPayload);
+
+        currentTrip = aiTrip;
+        savedTrips.unshift(aiTrip);
+        packingItems = aiTrip.packing || [];
+        expenses = aiTrip.expenses || [];
         plannedTotalBudget = budget;
         activeItineraryDay = 1;
 
-        showToast(`Trip created and saved to database!`, '🎉');
-      }
+        renderItineraryView();
+        renderPackingList();
+        renderBudget();
+        renderMyTrips();
 
-      renderItineraryView();
-      renderPackingList();
-      renderBudget();
-      renderMyTrips();
-      navigateTo('itinerary');
+        navigateTo('itinerary');
+        showToast(`AI Trip to ${destination} generated and saved!`, '🎉', 4000);
+      } catch (err) {
+        console.error('Groq generation error:', err);
+
+        // Friendly error prompt with Retry or Fallback option
+        const isKeyMissing = err.message.includes('XAI_API_KEY') || err.message.includes('not configured');
+        const userNotice = isKeyMissing
+          ? 'Groq API Key (XAI_API_KEY) in .env is missing or invalid. Would you like to create the trip using local scrapbook templates?'
+          : `AI generation encountered an issue (${err.message}). Use local scrapbook templates instead?`;
+
+        const fallbackConfirm = confirm(`${userNotice}\n\nClick OK to generate using local scrapbook planner, or Cancel to retry.`);
+
+        if (fallbackConfirm) {
+          // Graceful fallback to local planner
+          const tripId = 'trip-' + Date.now();
+          const fallbackDays = generateFallbackDays(destination, duration, accommodation, style);
+          const defaultPacking = [
+            { id: 1, text: 'Passport & Travel Documents', category: 'tech', checked: true },
+            { id: 2, text: 'Universal Power Adapter', category: 'tech', checked: true },
+            { id: 3, text: 'Comfy Walking Shoes', category: 'clothing', checked: false },
+            { id: 4, text: 'Destination Weather Layers', category: 'clothing', checked: false },
+            { id: 5, text: 'Sunscreen & Personal Care', category: 'toiletries', checked: false },
+            { id: 6, text: 'Scrapbook Camera & Journal', category: 'essentials', checked: true }
+          ];
+          const defaultExpenses = [
+            { id: 1, category: 'Flight & Transit', desc: 'Flights / Transportation', amount: Math.round(budget * 0.4) },
+            { id: 2, category: 'Hotel & Stay', desc: `${accommodation} accommodation`, amount: Math.round(budget * 0.35) },
+            { id: 3, category: 'Food & Drinks', desc: 'Meals & local delicacies', amount: Math.round(budget * 0.15) }
+          ];
+
+          const fallbackTrip = {
+            id: tripId,
+            title: `${destination} Adventure ✨`,
+            destination, departure, returnDate, duration, budget,
+            currency, currencySymbol, travellerType, travellerCount,
+            style, accommodation, pace,
+            image: 'https://images.unsplash.com/photo-1488646953014-85cb44e25828?w=600&auto=format&fit=crop&q=80',
+            days: fallbackDays,
+            packing: defaultPacking,
+            expenses: defaultExpenses
+          };
+
+          await API.createTrip(fallbackTrip);
+
+          currentTrip = fallbackTrip;
+          savedTrips.unshift(fallbackTrip);
+          packingItems = defaultPacking;
+          expenses = defaultExpenses;
+          plannedTotalBudget = budget;
+          activeItineraryDay = 1;
+
+          renderItineraryView();
+          renderPackingList();
+          renderBudget();
+          renderMyTrips();
+          navigateTo('itinerary');
+          showToast(`Saved trip to ${destination}!`, '🗺️');
+        } else {
+          showToast('Please check .env XAI_API_KEY and click "Create Itinerary" to retry.', '⚠️', 5000);
+        }
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = originalBtnHtml;
+      }
     });
   }
 
 
   // ==========================================
-  // 6. ITINERARY (View & Add Moment -> Backend)
+  // 6. ITINERARY RENDERING
   // ==========================================
   const itineraryTripTitle = document.getElementById('itineraryTripTitle');
   const itineraryTripSubtitle = document.getElementById('itineraryTripSubtitle');
@@ -474,7 +534,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     itineraryTripSubtitle.textContent = `${currentTrip.duration} Days • ${currentTrip.travellerCount} Travellers (${currentTrip.travellerType}) • ${currentTrip.style}`;
 
     if (!currentTrip.days || currentTrip.days.length === 0) {
-      currentTrip.days = generateItineraryDays(currentTrip.destination, currentTrip.duration, currentTrip.accommodation, currentTrip.style);
+      currentTrip.days = generateFallbackDays(currentTrip.destination, currentTrip.duration, currentTrip.accommodation, currentTrip.style);
     }
 
     if (activeItineraryDay > currentTrip.days.length) {
@@ -533,7 +593,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
   }
 
-  // Add custom moment & persist to backend database
+  // Add custom activity to day
   const addActivityForm = document.getElementById('addActivityForm');
   if (addActivityForm) {
     addActivityForm.addEventListener('submit', async (e) => {
@@ -549,9 +609,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!dayObj.activities[period]) dayObj.activities[period] = [];
         dayObj.activities[period].push({ time, title, desc });
 
-        // Save to backend database
         await API.saveItinerary(currentTrip.id, currentTrip.days);
-
         renderItineraryView();
         addActivityForm.reset();
         showToast(`Saved to Day ${activeItineraryDay}!`, '✨');
@@ -561,7 +619,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   // ==========================================
-  // 7. PACKING LIST (Check, Add, Delete -> Backend)
+  // 7. PACKING LIST
   // ==========================================
   const packingStatsEl = document.getElementById('packingStats');
   const packingPercentEl = document.getElementById('packingPercent');
@@ -604,7 +662,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           <button class="item-delete-btn" data-id="${item.id}" title="Remove item">&times;</button>
         `;
 
-        // Checkbox click -> persist
         const chk = li.querySelector('input[type="checkbox"]');
         chk.addEventListener('change', async (e) => {
           item.checked = e.target.checked;
@@ -613,7 +670,6 @@ document.addEventListener('DOMContentLoaded', async () => {
           if (currentTrip) await API.savePacking(currentTrip.id, packingItems);
         });
 
-        // Delete button -> persist
         const delBtn = li.querySelector('.item-delete-btn');
         delBtn.addEventListener('click', async () => {
           packingItems = packingItems.filter(i => i.id !== item.id);
@@ -658,7 +714,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   // ==========================================
-  // 8. BUDGET TRACKER (Record & Delete -> Backend)
+  // 8. BUDGET TRACKER
   // ==========================================
   const budgetTotalDisplay = document.getElementById('budgetTotalDisplay');
   const budgetSpentDisplay = document.getElementById('budgetSpentDisplay');
@@ -739,7 +795,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 
   // ==========================================
-  // 9. MY TRIPS (View, Edit, Delete -> Backend)
+  // 9. MY TRIPS
   // ==========================================
   const myTripsContainer = document.getElementById('myTripsContainer');
 
@@ -770,7 +826,6 @@ document.addEventListener('DOMContentLoaded', async () => {
         </div>
       `;
 
-      // View Trip: Fetch full trip from Backend
       card.querySelector('.view-trip-btn').addEventListener('click', async () => {
         try {
           const fullTrip = await API.getTrip(trip.id);
@@ -790,12 +845,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         showToast(`Loaded ${trip.destination}!`, '🗺️');
       });
 
-      // Edit Trip: Load form to edit
       card.querySelector('.edit-trip-btn').addEventListener('click', () => {
         editExistingTrip(trip);
       });
 
-      // Delete Trip: DELETE -> Backend
       card.querySelector('.delete-trip-btn').addEventListener('click', async () => {
         if (savedTrips.length <= 1) {
           showToast('Keep at least one trip in your scrapbook!', '🌸');
